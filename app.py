@@ -7,6 +7,10 @@ from datetime import datetime
 from scipy.optimize import minimize
 
 # Funciones auxiliares
+def calcular_rendimiento_ventana(returns, window):
+    if len(returns) < window:
+        return np.nan
+    return (1 + returns.iloc[-window:]).prod() - 1
 def calcular_sesgo(df):
     return df.skew()
 
