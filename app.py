@@ -6,6 +6,47 @@ import numpy as np
 from datetime import datetime
 from scipy.optimize import minimize
 
+def calcular_portafolio_minima_varianza(returns):
+    """
+    Calcula los pesos del portafolio de mínima varianza.
+    
+    Parameters:
+        returns (DataFrame): Rendimientos históricos de los activos.
+
+    Returns:
+        dict: Pesos óptimos de los activos para el portafolio de mínima varianza.
+    """
+    # Número de activos
+    n_activos = returns.shape[1]
+    
+    # Matriz de covarianza
+    cov_matrix = returns.cov()
+    
+    # Restricción: los pesos deben sumar 1
+    def restriccion_suma_pesos(weights):
+        return np.sum(weights) - 1
+
+    # Función objetivo: minimizar la varianza del portafolio
+    def funcion_varianza(weights):
+        return weights.T @ cov_matrix @ weights
+
+    # Restricciones
+    restricciones = ({'type': 'eq', 'fun': restriccion_suma_pesos})
+    
+    # Límites: los pesos deben estar entre 0 y 1
+    limites = [(0, 1) for _ in range(n_activos)]
+    
+    # Pesos iniciales
+    pesos_iniciales = np.ones(n_activos) / n_activos
+    
+    # Optimización
+    resultado = minimize(funcion_varianza, pesos_iniciales, method='SLSQP', bounds=limites, constraints=restricciones)
+    
+    if resultado.success:
+        return dict(zip(returns.columns, resultado.x))
+    else:
+        raise ValueError("La optimización no convergió.")
+
 # Funciones auxiliares
 def calcular_rendimiento_ventana(returns, window):
     if len(returns) < window:
@@ -174,7 +215,7 @@ else:
     portfolio_cumulative_returns = (1 + portfolio_returns).cumprod() - 1
 
     # Crear pestañas
-    tab1, tab2 = st.tabs(["Análisis de Activos Individuales", "Análisis del Portafolio"])
+    tab1, tab2, tab3 = st.tabs(["Análisis de Activos Individuales", "Análisis del Portafolio", "Minima Varianza"])
 
     etf_summaries = {
         "IEI": {
@@ -420,4 +461,16 @@ else:
         fig_comparison.update_layout(title='Comparación de Rendimientos', xaxis_title='Días', yaxis_title='Rendimiento', barmode='group')
         # Gráfico de comparación de rendimientos
         st.plotly_chart(fig_comparison, use_container_width=True, key="returns_comparison")
-       
+
+
+    with tab3 : 
+        st.header("Análisis del Portafolio")
+    
+        # Pesos de mínima varianza
+        try:
+            pesos_min_var = calcular_portafolio_minima_varianza(returns[simbolos])
+            st.subheader("Pesos del Portafolio de Mínima Varianza")
+            st.write(pesos_min_var)
+        except Exception as e:
+            st.error(f"Error al calcular el portafolio de mínima varianza: {e}")
+        
