@@ -300,6 +300,8 @@ else:
                 f'Distribución de Retornos - {selected_benchmark}'
             )
             st.plotly_chart(fig_hist_bench, use_container_width=True, key="hist_bench_1")
+            st.subheader(f"Distribución de Retornos: holaaa")
+            
 
 
         
