@@ -275,7 +275,7 @@ else:
         beta_asset = calcular_beta(returns[selected_asset], returns[benchmark])
         st.metric(f"Beta vs {selected_benchmark}", f"{beta_asset:.2f}")
 
-        t.subheader(f"Distribución de Retornos: {selected_asset} vs {selected_benchmark}")
+        st.subheader(f"Distribución de Retornos: {selected_asset} vs {selected_benchmark}")
         
         col1, col2 = st.columns(2)
         
