@@ -300,8 +300,7 @@ else:
                 f'Distribución de Retornos - {selected_benchmark}'
             )
             st.plotly_chart(fig_hist_bench, use_container_width=True, key="hist_bench_1")
-            st.subheader(f"Distribución de Retornos: holaaa")
-            
+           
 
 
         
@@ -417,3 +416,4 @@ else:
         fig_comparison.update_layout(title='Comparación de Rendimientos', xaxis_title='Días', yaxis_title='Rendimiento', barmode='group')
         # Gráfico de comparación de rendimientos
         st.plotly_chart(fig_comparison, use_container_width=True, key="returns_comparison")
+       
