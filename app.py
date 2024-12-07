@@ -6,52 +6,62 @@ import numpy as np
 from datetime import datetime
 from scipy.optimize import minimize
 
-def calcular_portafolio_minima_varianza(returns):
-    """
-    Calcula los pesos del portafolio de mínima varianza.
-    
-    Parameters:
-        returns (DataFrame): Rendimientos históricos de los activos.
-
-    Returns:
-        dict: Pesos óptimos de los activos para el portafolio de mínima varianza.
-    """
-    # Número de activos
-    n_activos = returns.shape[1]
-    
-    # Matriz de covarianza
-    cov_matrix = returns.cov()
-    
-    # Restricción: los pesos deben sumar 1
-    def restriccion_suma_pesos(weights):
-        return np.sum(weights) - 1
-
-    # Función objetivo: minimizar la varianza del portafolio
-    def funcion_varianza(weights):
-        return weights.T @ cov_matrix @ weights
-
-    # Restricciones
-    restricciones = ({'type': 'eq', 'fun': restriccion_suma_pesos})
-    
-    # Límites: los pesos deben estar entre 0 y 1
-    limites = [(0, 1) for _ in range(n_activos)]
-    
-    # Pesos iniciales
-    pesos_iniciales = np.ones(n_activos) / n_activos
-    
-    # Optimización
-    resultado = minimize(funcion_varianza, pesos_iniciales, method='SLSQP', bounds=limites, constraints=restricciones)
-    
-    if resultado.success:
-        return dict(zip(returns.columns, resultado.x))
-    else:
-        raise ValueError("La optimización no convergió.")
+# Configuración de la página
+st.set_page_config(page_title="Analizador de Portafolio", layout="wide", page_icon="📊")
+st.sidebar.title("📈 Analizador Cool de Portafolio de Inversión")
 
 # Funciones auxiliares
+
+def calcular_minima_volatilidad_objetivo(returns, target_return=0.10):
+    n = returns.shape[1]
+    
+    # Función objetivo: minimizar la varianza del portafolio
+    def portfolio_volatility(weights):
+        cov_matrix = returns.cov()
+        return np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)) * 252)
+
+    # Restricciones
+    constraints = [
+        {'type': 'eq', 'fun': lambda weights: np.sum(weights) - 1},  # Pesos deben sumar 1
+        {'type': 'eq', 'fun': lambda weights: np.dot(weights, returns.mean() * 252) - target_return}  # Rendimiento objetivo anualizado
+    ]
+    
+    # Límites: los pesos deben estar entre 0 y 1
+    bounds = tuple((0, 1) for _ in range(n))
+    
+    # Pesos iniciales iguales
+    initial_weights = np.array([1 / n] * n)
+    
+    # Optimización
+    result = minimize(portfolio_volatility, initial_weights, method='SLSQP', bounds=bounds, constraints=constraints)
+    
+    return result.x  # Retorna los pesos óptimos
+
+
+def calcular_riesgo_black_litterman(returns, P, Q, omega, tau=0.05):
+    # Cálculo de la matriz de covarianza
+    cov_matrix = returns.cov()
+    
+    # Cálculo de los rendimientos esperados del mercado
+    pi = np.dot(cov_matrix, np.mean(returns, axis=0))
+    
+    # Ajuste de los rendimientos esperados con las opiniones del inversor
+    M_inverse = np.linalg.inv(np.dot(tau, cov_matrix))
+    omega_inverse = np.linalg.inv(omega)
+    adjusted_returns = np.dot(np.linalg.inv(M_inverse + np.dot(P.T, np.dot(omega_inverse, P))), 
+                              np.dot(M_inverse, pi) + np.dot(P.T, np.dot(omega_inverse, Q)))
+    
+    # Cálculo del riesgo ajustado
+    adjusted_cov_matrix = cov_matrix + np.dot(np.dot(P.T, omega_inverse), P)
+    riesgo = np.sqrt(np.dot(adjusted_returns.T, np.dot(adjusted_cov_matrix, adjusted_returns)))
+    
+    return riesgo
+
 def calcular_rendimiento_ventana(returns, window):
     if len(returns) < window:
         return np.nan
     return (1 + returns.iloc[-window:]).prod() - 1
+
 def calcular_sesgo(df):
     return df.skew()
 
@@ -63,7 +73,7 @@ def calcular_ultimo_drawdown(series):
     drawdown = (series - peak) / peak
     ultimo_drawdown = drawdown.iloc[-1]
     return ultimo_drawdown
-    
+
 def obtener_datos_acciones(simbolos, start_date, end_date):
     data = yf.download(simbolos, start=start_date, end=end_date)['Close']
     return data.ffill().dropna()
@@ -91,17 +101,7 @@ def calcular_beta(asset_returns, market_returns):
     covariance = np.cov(asset_returns, market_returns)[0, 1]
     market_variance = np.var(market_returns)
     return covariance / market_variance if market_variance != 0 else np.nan
-def calcular_sharpe_ratio(returns, risk_free_rate=0.02):
-    excess_returns = returns - risk_free_rate / 252
-    return np.sqrt(252) * excess_returns.mean() / excess_returns.std()
 
-def calcular_sortino_ratio(returns, risk_free_rate=0.02, target_return=0):
-    excess_returns = returns - risk_free_rate / 252
-    downside_returns = excess_returns[excess_returns < target_return]
-    downside_deviation = np.sqrt(np.mean(downside_returns**2))
-    return np.sqrt(252) * excess_returns.mean() / downside_deviation if downside_deviation != 0 else np.nan
-
-# Nuevas funciones para VaR y CVaR
 def calcular_var_cvar(returns, confidence=0.95):
     VaR = returns.quantile(1 - confidence)
     CVaR = returns[returns <= VaR].mean()
@@ -112,79 +112,117 @@ def calcular_var_cvar_ventana(returns, window):
         return np.nan, np.nan
     window_returns = returns.iloc[-window:]
     return calcular_var_cvar(window_returns)
+
 def crear_histograma_distribucion(returns, var_95, cvar_95, title):
-    # Crear el histograma base
     fig = go.Figure()
-    
-    # Calcular los bins para el histograma
     counts, bins = np.histogram(returns, bins=50)
-    
-    # Separar los bins en dos grupos: antes y después del VaR
     mask_before_var = bins[:-1] <= var_95
-    
-    # Añadir histograma para valores antes del VaR (rojo)
+
     fig.add_trace(go.Bar(
         x=bins[:-1][mask_before_var],
         y=counts[mask_before_var],
         width=np.diff(bins)[mask_before_var],
         name='Retornos < VaR',
-        marker_color='rgba(255, 65, 54, 0.6)'
+        marker_color='rgba(255, 69, 0, 0.8)'  # Rojo intenso
     ))
-    
-    # Añadir histograma para valores después del VaR (azul)
+
     fig.add_trace(go.Bar(
         x=bins[:-1][~mask_before_var],
         y=counts[~mask_before_var],
         width=np.diff(bins)[~mask_before_var],
         name='Retornos > VaR',
-        marker_color='rgba(31, 119, 180, 0.6)'
+        marker_color='rgba(50, 205, 50, 0.8)'  # Verde brillante
     ))
-    
-    # Añadir líneas verticales para VaR y CVaR
+
     fig.add_trace(go.Scatter(
         x=[var_95, var_95],
         y=[0, max(counts)],
         mode='lines',
         name='VaR 95%',
-        line=dict(color='green', width=2, dash='dash')
+        line=dict(color='dodgerblue', width=3, dash='dash')  # Azul brillante
     ))
-    
+
     fig.add_trace(go.Scatter(
         x=[cvar_95, cvar_95],
         y=[0, max(counts)],
         mode='lines',
         name='CVaR 95%',
-        line=dict(color='purple', width=2, dash='dot')
+        line=dict(color='purple', width=3, dash='dot')  # Morado brillante
     ))
-    
-    # Actualizar el diseño
+
     fig.update_layout(
-        title=title,
-        xaxis_title='Retornos',
-        yaxis_title='Frecuencia',
-        showlegend=True,
+        title=dict(text=title, font=dict(size=20, color='midnightblue')),
+        xaxis=dict(title='Retornos', showgrid=True, gridcolor='lightblue', zerolinecolor='blue'),
+        yaxis=dict(title='Frecuencia', showgrid=True, gridcolor='lightblue', zerolinecolor='blue'),
         barmode='overlay',
-        bargap=0
+        bargap=0.1,
+        plot_bgcolor='rgba(240, 248, 255, 1)',  # Azul claro
+        paper_bgcolor='rgba(230, 230, 250, 1)',  # Lavanda
+        legend=dict(font=dict(size=12, color='darkblue'))
     )
-    
     return fig
 
-# Configuración de la página
-st.set_page_config(page_title="Analizador de Portafolio", layout="wide")
-st.sidebar.title("Analizador de Portafolio de Inversión")
 
-# ETFs permitidos y ventana de tiempo fija
+def calcular_minima_varianza(returns):
+    n = returns.shape[1]
+    
+    # Función objetivo: minimizar la varianza
+    def portfolio_variance(weights):
+        cov_matrix = returns.cov()
+        return np.dot(weights.T, np.dot(cov_matrix, weights))
+    
+    # Restricciones: los pesos deben sumar 1
+    constraints = ({'type': 'eq', 'fun': lambda weights: np.sum(weights) - 1})
+    
+    # Límites: los pesos deben estar entre 0 y 1
+    bounds = tuple((0, 1) for _ in range(n))
+    
+    # Pesos iniciales iguales
+    initial_weights = np.array([1 / n] * n)
+    
+    # Optimización
+    result = minimize(portfolio_variance, initial_weights, method='SLSQP', bounds=bounds, constraints=constraints)
+    
+    return result.x  # Retorna los pesos óptimos
+
+#Portafolio Maximo Sharpe Ratio
+def calcular_maximo_sharpe(returns, risk_free_rate=0.02):
+    n = returns.shape[1]
+    
+    # Función objetivo: maximizar el Sharpe Ratio
+    def negative_sharpe_ratio(weights):
+        portfolio_return = np.dot(weights, returns.mean()) * 252
+        portfolio_std = np.sqrt(np.dot(weights.T, np.dot(returns.cov() * 252, weights)))
+        sharpe_ratio = (portfolio_return - risk_free_rate) / portfolio_std
+        return -sharpe_ratio  # Negativo para maximización
+    
+    # Restricciones: los pesos deben sumar 1
+    constraints = ({'type': 'eq', 'fun': lambda weights: np.sum(weights) - 1})
+    
+    # Límites: los pesos deben estar entre 0 y 1
+    bounds = tuple((0, 1) for _ in range(n))
+    
+    # Pesos iniciales iguales
+    initial_weights = np.array([1 / n] * n)
+    
+    # Optimización
+    result = minimize(negative_sharpe_ratio, initial_weights, method='SLSQP', bounds=bounds, constraints=constraints)
+    
+    return result.x  #
+        
+
+
+# ETFs permitidos y datos
 etfs_permitidos = ["IEI", "EMB", "SPY", "IEMG", "GLD"]
 start_date = "2010-01-01"
 end_date = "2023-12-31"
 
-# Entrada de símbolos y pesos
 simbolos_input = st.sidebar.text_input(
-    "Ingrese los símbolos de los ETFs (deben ser IEI, EMB, SPY, IEMG, GLD):", 
+    "🧩 Ingrese los símbolos de los ETFs (IEI, EMB, SPY, IEMG, GLD):", 
     ",".join(etfs_permitidos)
 )
 pesos_input = st.sidebar.text_input(
-    "Ingrese los pesos correspondientes separados por comas (deben sumar 1):", 
+    "📊 Ingrese los pesos correspondientes (deben sumar 1):", 
     "0.2,0.2,0.2,0.2,0.2"
 )
 
@@ -215,7 +253,7 @@ else:
     portfolio_cumulative_returns = (1 + portfolio_returns).cumprod() - 1
 
     # Crear pestañas
-    tab1, tab2, tab3 = st.tabs(["Análisis de Activos Individuales", "Análisis del Portafolio", "Minima Varianza"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["Análisis de Activos Individuales", "Análisis del Portafolio", "Portafolio Mínima Varianza", "Portafolio Max Sharpe Ratio","Portafolio Mínima Vol 10% obj", "Portafolio Black Litterman","BackTesting"])
 
     etf_summaries = {
         "IEI": {
@@ -463,14 +501,293 @@ else:
         st.plotly_chart(fig_comparison, use_container_width=True, key="returns_comparison")
 
 
-    with tab3 : 
-        st.header("Análisis del Portafolio")
+
+with tab3:
+    st.header("Análisis del Portafolio de Mínima Varianza")
     
-        # Pesos de mínima varianza
-        try:
-            pesos_min_var = calcular_portafolio_minima_varianza(returns[simbolos])
-            st.subheader("Pesos del Portafolio de Mínima Varianza")
-            st.write(pesos_min_var)
-        except Exception as e:
-            st.error(f"Error al calcular el portafolio de mínima varianza: {e}")
-        
+    # Calcular los pesos óptimos
+    min_var_weights = calcular_minima_varianza(returns[simbolos])
+    
+    # Calcular métricas del portafolio de mínima varianza
+    min_var_returns = calcular_rendimientos_portafolio(returns[simbolos], min_var_weights)
+    min_var_cumulative = (1 + min_var_returns).cumprod() - 1
+    min_var_risk = np.sqrt(252) * min_var_returns.std()
+    min_var_mean_return = min_var_returns.mean() * 252  # Anualizado
+    
+    st.subheader("Pesos del Portafolio de Mínima Varianza")
+    weights_df = pd.DataFrame({
+        "ETF": simbolos,
+        "Peso Óptimo": min_var_weights
+    })
+    st.dataframe(weights_df.style.format({"Peso Óptimo": "{:.2%}"}))
+    
+    # Mostrar métricas clave
+    col1, col2 = st.columns(2)
+    col1.metric("Riesgo (Desviación Estándar Anualizada)", f"{min_var_risk:.2%}")
+    col2.metric("Rendimiento Esperado Anualizado", f"{min_var_mean_return:.2%}")
+    
+    # Comparar rendimientos acumulados
+    fig_cumulative = go.Figure()
+    fig_cumulative.add_trace(go.Scatter(
+        x=min_var_cumulative.index, 
+        y=min_var_cumulative, 
+        name="Portafolio de Mínima Varianza",
+        line=dict(color='royalblue')
+    ))
+    fig_cumulative.add_trace(go.Scatter(
+        x=portfolio_cumulative_returns.index, 
+        y=portfolio_cumulative_returns, 
+        name="Portafolio Actual",
+        line=dict(color='orange', dash='dot')
+    ))
+    fig_cumulative.add_trace(go.Scatter(
+        x=cumulative_returns.index, 
+        y=cumulative_returns[benchmark], 
+        name=f"Benchmark: {selected_benchmark}",
+        line=dict(color='green', dash='dash')
+    ))
+    fig_cumulative.update_layout(
+        title="Comparación de Rendimientos Acumulados",
+        xaxis_title="Fecha",
+        yaxis_title="Rendimientos Acumulados",
+        plot_bgcolor='rgba(240,240,240,1)'
+    )
+    st.plotly_chart(fig_cumulative, use_container_width=True)
+    
+    # Distribución de rendimientos del portafolio de mínima varianza
+    var_95, cvar_95 = calcular_var_cvar(min_var_returns)
+    fig_dist = crear_histograma_distribucion(
+        min_var_returns,
+        var_95,
+        cvar_95,
+        title="Distribución de Retornos del Portafolio de Mínima Varianza"
+    )
+    st.plotly_chart(fig_dist, use_container_width=True)
+
+with tab4:
+    st.header("Análisis del Portafolio de Máximo Sharpe Ratio")
+    
+    # Calcular los pesos óptimos
+    max_sharpe_weights = calcular_maximo_sharpe(returns[simbolos])
+    
+    # Calcular métricas del portafolio de máximo Sharpe Ratio
+    max_sharpe_returns = calcular_rendimientos_portafolio(returns[simbolos], max_sharpe_weights)
+    max_sharpe_cumulative = (1 + max_sharpe_returns).cumprod() - 1
+    max_sharpe_risk = np.sqrt(252) * max_sharpe_returns.std()
+    max_sharpe_mean_return = max_sharpe_returns.mean() * 252  # Anualizado
+    risk_free_rate = 0.02
+    max_sharpe_ratio = (max_sharpe_mean_return - risk_free_rate) / max_sharpe_risk
+    
+    st.subheader("Pesos del Portafolio de Máximo Sharpe Ratio")
+    weights_df = pd.DataFrame({
+        "ETF": simbolos,
+        "Peso Óptimo": max_sharpe_weights
+    })
+    st.dataframe(weights_df.style.format({"Peso Óptimo": "{:.2%}"}))
+    
+    # Mostrar métricas clave
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Riesgo (Desviación Estándar Anualizada)", f"{max_sharpe_risk:.2%}")
+    col2.metric("Rendimiento Esperado Anualizado", f"{max_sharpe_mean_return:.2%}")
+    col3.metric("Sharpe Ratio", f"{max_sharpe_ratio:.2f}")
+    
+    # Comparar rendimientos acumulados
+    fig_cumulative = go.Figure()
+    fig_cumulative.add_trace(go.Scatter(
+        x=max_sharpe_cumulative.index, 
+        y=max_sharpe_cumulative, 
+        name="Portafolio de Máximo Sharpe Ratio",
+        line=dict(color='gold')
+    ))
+    fig_cumulative.add_trace(go.Scatter(
+        x=portfolio_cumulative_returns.index, 
+        y=portfolio_cumulative_returns, 
+        name="Portafolio Actual",
+        line=dict(color='orange', dash='dot')
+    ))
+    fig_cumulative.add_trace(go.Scatter(
+        x=cumulative_returns.index, 
+        y=cumulative_returns[benchmark], 
+        name=f"Benchmark: {selected_benchmark}",
+        line=dict(color='green', dash='dash')
+    ))
+    fig_cumulative.update_layout(
+        title="Comparación de Rendimientos Acumulados",
+        xaxis_title="Fecha",
+        yaxis_title="Rendimientos Acumulados",
+        plot_bgcolor='rgba(240,240,240,1)'
+    )
+    st.plotly_chart(fig_cumulative, use_container_width=True)
+    
+    # Distribución de rendimientos del portafolio de máximo Sharpe Ratio
+    var_95, cvar_95 = calcular_var_cvar(max_sharpe_returns)
+    fig_dist = crear_histograma_distribucion(
+        max_sharpe_returns,
+        var_95,
+        cvar_95,
+        title="Distribución de Retornos del Portafolio de Máximo Sharpe Ratio"
+    )
+    st.plotly_chart(fig_dist, use_container_width=True)
+
+with tab5:
+    st.header("Portafolio de Mínima Volatilidad con Objetivo de Rendimiento (MXN)")
+
+    # Convertir los rendimientos a pesos mexicanos suponiendo un tipo de cambio simulado
+    tipo_cambio_usd_mxn = 17.0  # Puedes actualizar el tipo de cambio según sea necesario
+    returns_mxn = returns[simbolos] * tipo_cambio_usd_mxn
+    
+    # Calcular los pesos óptimos para el portafolio de mínima volatilidad con un rendimiento objetivo del 10%
+    min_vol_weights = calcular_minima_volatilidad_objetivo(returns_mxn)
+
+    # Calcular métricas del portafolio de mínima volatilidad con rendimiento objetivo
+    min_vol_returns = calcular_rendimientos_portafolio(returns_mxn, min_vol_weights)
+    min_vol_cumulative = (1 + min_vol_returns).cumprod() - 1
+    min_vol_risk = np.sqrt(252) * min_vol_returns.std()
+    min_vol_mean_return = min_vol_returns.mean() * 252  # Anualizado
+
+    st.subheader("Pesos del Portafolio de Mínima Volatilidad con Objetivo de Rendimiento")
+    weights_df = pd.DataFrame({
+        "ETF": simbolos,
+        "Peso Óptimo": min_vol_weights
+    })
+    st.dataframe(weights_df.style.format({"Peso Óptimo": "{:.2%}"}))
+
+    # Mostrar métricas clave
+    col1, col2 = st.columns(2)
+    col1.metric("Riesgo (Desviación Estándar Anualizada)", f"{min_vol_risk:.2%}")
+    col2.metric("Rendimiento Esperado Anualizado", f"{min_vol_mean_return:.2%}")
+
+    # Comparar rendimientos acumulados
+    fig_cumulative = go.Figure()
+    fig_cumulative.add_trace(go.Scatter(
+        x=min_vol_cumulative.index, 
+        y=min_vol_cumulative, 
+        name="Portafolio de Mínima Volatilidad con Objetivo",
+        line=dict(color='blue')
+    ))
+    fig_cumulative.add_trace(go.Scatter(
+        x=portfolio_cumulative_returns.index, 
+        y=portfolio_cumulative_returns, 
+        name="Portafolio Actual",
+        line=dict(color='orange', dash='dot')
+    ))
+    fig_cumulative.add_trace(go.Scatter(
+        x=cumulative_returns.index, 
+        y=cumulative_returns[benchmark], 
+        name=f"Benchmark: {selected_benchmark}",
+        line=dict(color='green', dash='dash')
+    ))
+    fig_cumulative.update_layout(
+        title="Comparación de Rendimientos Acumulados",
+        xaxis_title="Fecha",
+        yaxis_title="Rendimientos Acumulados",
+        plot_bgcolor='rgba(240,240,240,1)'
+    )
+    st.plotly_chart(fig_cumulative, use_container_width=True)
+    
+
+with tab6: 
+    # Rango de fechas para el backtesting
+    backtest_start = "2021-01-01"
+    backtest_end = "2023-12-31"
+    
+    # ETFs permitidos y benchmark
+    etfs_permitidos = ["IEI", "EMB", "SPY", "IEMG", "GLD"]
+    benchmark_symbol = "^GSPC"  # S&P500
+    
+    # Pesos óptimos de los portafolios
+    weights_min_var = np.array([0.2, 0.2, 0.2, 0.2, 0.2])  # Portafolio de Mínima Varianza
+    weights_max_sharpe = np.array([0.0, 0.0, 0.975, 0.0, 0.025])  # Portafolio de Máximo Sharpe Ratio
+    weights_min_vol_target = np.array([0.9248, 0.0, 0.0752, 0.0, 0.0])  # Portafolio de Mínima Volatilidad
+    weights_equal = np.array([1 / len(etfs_permitidos)] * len(etfs_permitidos))  # Portafolio Equitativo
+    
+    # Descargamos los datos
+    def obtener_datos(etfs, benchmark, start_date, end_date):
+        symbols = etfs + [benchmark]
+        data = yf.download(symbols, start=start_date, end=end_date)['Adj Close']
+        return data.ffill().dropna()
+    
+    # Calcular métricas de los portafolios
+    def calcular_metricas(returns, weights):
+        portfolio_returns = (returns * weights).sum(axis=1)
+        annual_return = portfolio_returns.mean() * 252
+        annual_volatility = portfolio_returns.std() * np.sqrt(252)
+        sharpe_ratio = (annual_return - 0.02) / annual_volatility
+        downside_returns = portfolio_returns[portfolio_returns < 0]
+        downside_deviation = np.sqrt(np.mean(downside_returns**2)) * np.sqrt(252)
+        sortino_ratio = annual_return / downside_deviation if downside_deviation != 0 else np.nan
+        var_95 = portfolio_returns.quantile(0.05)
+        cvar_95 = portfolio_returns[portfolio_returns <= var_95].mean()
+        cumulative_return = (1 + portfolio_returns).prod() - 1
+        skewness = portfolio_returns.skew()
+        kurtosis = portfolio_returns.kurtosis()
+        drawdown = calcular_ultimo_drawdown((1 + portfolio_returns).cumprod())
+        return {
+            "Rendimiento Anualizado": annual_return,
+            "Volatilidad Anualizada": annual_volatility,
+            "Sharpe Ratio": sharpe_ratio,
+            "Sortino Ratio": sortino_ratio,
+            "VaR 95%": var_95,
+            "CVaR 95%": cvar_95,
+            "Sesgo": skewness,
+            "Exceso de Curtosis": kurtosis,
+            "Drawdown": drawdown,
+            "Rendimiento Acumulado": cumulative_return
+        }
+    
+    # Calcular el drawdown máximo
+    def calcular_ultimo_drawdown(cumulative_returns):
+        peak = cumulative_returns.expanding(min_periods=1).max()
+        drawdown = (cumulative_returns - peak) / peak
+        return drawdown.min()
+    
+    # Descargar los datos
+    
+    data = obtener_datos(etfs_permitidos, benchmark_symbol, backtest_start, backtest_end)
+    returns = data.pct_change().dropna()
+    
+    # Calcular métricas para cada portafolio
+    metrics = {}
+    metrics["Mínima Varianza"] = calcular_metricas(returns[etfs_permitidos], weights_min_var)
+    metrics["Máximo Sharpe Ratio"] = calcular_metricas(returns[etfs_permitidos], weights_max_sharpe)
+    metrics["Mínima Volatilidad"] = calcular_metricas(returns[etfs_permitidos], weights_min_vol_target)
+    metrics["Equitativo"] = calcular_metricas(returns[etfs_permitidos], weights_equal)
+    metrics["Benchmark"] = calcular_metricas(returns[[benchmark_symbol]], [1])
+    
+    # Mostrar resultados
+    st.header("Resultados del Backtesting (2021-2023)")
+    metrics_df = pd.DataFrame(metrics).T
+    st.dataframe(metrics_df.style.format(
+        "{:.2%}", subset=["Rendimiento Anualizado", "Volatilidad Anualizada", "Rendimiento Acumulado"]
+    ).format(
+        "{:.2f}", subset=["Sharpe Ratio", "Sortino Ratio", "VaR 95%", "CVaR 95%", "Sesgo", "Exceso de Curtosis", "Drawdown"]
+    ))
+    
+    # Gráfico de rendimientos acumulados
+    st.subheader("Comparación de Rendimientos Acumulados")
+    fig = go.Figure()
+    for name, weights in zip(["Mínima Varianza", "Máximo Sharpe Ratio", "Mínima Volatilidad", "Equitativo"],
+                             [weights_min_var, weights_max_sharpe, weights_min_vol_target, weights_equal]):
+        cumulative_returns = (1 + (returns[etfs_permitidos] * weights).sum(axis=1)).cumprod()
+        fig.add_trace(go.Scatter(x=cumulative_returns.index, y=cumulative_returns, name=name))
+    
+    benchmark_cumulative = (1 + returns[benchmark_symbol]).cumprod()
+    fig.add_trace(go.Scatter(x=benchmark_cumulative.index, y=benchmark_cumulative, name="Benchmark"))
+    fig.update_layout(title="Rendimientos Acumulados", xaxis_title="Fecha", yaxis_title="Rendimiento Acumulado")
+    st.plotly_chart(fig)
+
+with tab7:
+    st.title('Cálculo de Riesgo con el Modelo de Black-Litterman')
+    # Datos de ejempl
+    returns = pd.DataFrame({
+    'Asset1': np.random.normal(0.01, 0.02, 100),
+    'Asset2': np.random.normal(0.02, 0.03, 100),
+    'Asset3': np.random.normal(0.015, 0.025, 100)
+    })
+
+    P = np.array([[1, -1, 0], [0, 1, -1]])
+    Q = np.array([0.01, 0.02])
+    omega = np.diag([0.0001, 0.0001])
+    
+    riesgo = calcular_riesgo_black_litterman(returns, P, Q, omega)
+    st.write(f'El riesgo calculado es: {riesgo}')
