@@ -75,9 +75,21 @@ def calcular_ultimo_drawdown(series):
     return ultimo_drawdown
 
 def obtener_datos_acciones(simbolos, start_date, end_date):
-    data = yf.download(simbolos, start=start_date, end=end_date)['Close']
-    return data.ffill().dropna()
-
+    try:
+        # Descargar los datos
+        data = yf.download(symbols, start=start_date, end=end_date)
+        
+        # Verificar si la columna 'Adj Close' está presente
+        if 'Adj Close' in data.columns:
+            return data['Adj Close'].ffill().dropna()
+        else:
+            # Si 'Adj Close' no está presente, usar 'Close' como alternativa
+            st.warning("La columna 'Adj Close' no está disponible. Usando 'Close' en su lugar.")
+            return data['Close'].ffill().dropna()
+    except Exception as e:
+        st.error(f"Error al descargar los datos: {e}")
+        return pd.DataFrame()  # Retorna un DataFrame vacío en caso de error
+    
 def calcular_metricas(df):
     returns = df.pct_change().dropna()
     cumulative_returns = (1 + returns).cumprod() - 1
