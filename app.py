@@ -755,7 +755,7 @@ with tab6:
     
     # Descargar los datos
     
-    data = obtener_datos(etfs_permitidos, benchmark_symbol, backtest_start, backtest_end)
+    data = obtener_datos(simbolos, benchmark_symbol, backtest_start, backtest_end)
     returns = data.pct_change().dropna()
     
     # Calcular métricas para cada portafolio
