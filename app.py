@@ -77,7 +77,7 @@ def calcular_ultimo_drawdown(series):
 def obtener_datos_acciones(simbolos, start_date, end_date):
     try:
         # Descargar los datos
-        data = yf.download(symbols, start=start_date, end=end_date)
+        data = yf.download(simbolos, start=start_date, end=end_date)
         
         # Verificar si la columna 'Adj Close' está presente
         if 'Adj Close' in data.columns:
